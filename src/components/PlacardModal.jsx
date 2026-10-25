@@ -1,5 +1,6 @@
 import React from 'react';
-import { X, Printer, QrCode, DoorOpen, CheckCircle, ShieldCheck } from 'lucide-react';
+import { X, Printer, DoorOpen, ShieldCheck } from 'lucide-react';
+import { QRCodeSVG } from 'qrcode.react';
 
 export default function PlacardModal({
   isOpen,
@@ -53,12 +54,18 @@ export default function PlacardModal({
           </div>
 
           <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 mb-4 inline-block">
-            {/* Clean SVG QR code placeholder */}
-            <div className="w-36 h-36 bg-slate-900 rounded-lg p-2 mx-auto flex items-center justify-center">
-              <QrCode className="w-28 h-28 text-white" />
+            {/* Real scannable SVG QR Code */}
+            <div className="w-36 h-36 bg-white rounded-lg mx-auto flex items-center justify-center overflow-hidden">
+              <QRCodeSVG
+                value={typeof window !== 'undefined' ? window.location.origin : ''}
+                size={144}
+                bgColor="#ffffff"
+                fgColor="#000000"
+                level="M"
+              />
             </div>
-            <div className="text-[10px] text-slate-500 font-mono mt-1">
-              SCAN TO VIEW ENTRANCE AUDIT
+            <div className="text-[10px] text-slate-500 font-mono mt-2">
+              SCAN TO OPEN OPEN DOOR
             </div>
           </div>
 

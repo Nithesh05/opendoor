@@ -16,10 +16,13 @@ export default function BeforeAfterModal({
   const [afterPhoto, setAfterPhoto] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
   const [improvedResult, setImprovedResult] = useState(null);
+  const [modalError, setModalError] = useState(null);
 
   const handleFileUpload = (e) => {
     const file = e.target.files?.[0];
     if (file) {
+      setModalError(null);
+      setImprovedResult(null);
       const reader = new FileReader();
       reader.onload = (event) => setAfterPhoto(event.target.result);
       reader.readAsDataURL(file);
@@ -27,6 +30,8 @@ export default function BeforeAfterModal({
   };
 
   const useSampleAfterRamp = () => {
+    setModalError(null);
+    setImprovedResult(null);
     fetch('/samples/clinic_after_ramp.jpg')
       .then(r => r.blob())
       .then(blob => {
@@ -39,6 +44,7 @@ export default function BeforeAfterModal({
   const runBeforeAfterAnalysis = async () => {
     if (!afterPhoto) return;
     setAnalyzing(true);
+    setModalError(null);
 
     try {
       const res = await fetch('/api/analyze', {
@@ -51,26 +57,63 @@ export default function BeforeAfterModal({
         })
       });
 
+      if (!res.ok) {
+        let errorMsg = 'The AI service is temporarily unavailable. Please try again.';
+        try {
+          const errData = await res.json();
+          if (errData?.error) errorMsg = errData.error;
+        } catch (_) {}
+        setModalError(errorMsg);
+        return;
+      }
+
       const data = await res.json();
       setImprovedResult(data);
 
-      // Trigger celebratory confetti if improved!
-      confetti({
-        particleCount: 100,
-        spread: 70,
-        origin: { y: 0.6 }
-      });
+      const oldUpper = Array.isArray(auditData?.score_range?.wheelchair)
+        ? (auditData.score_range.wheelchair[1] ?? auditData.score_range.wheelchair[0])
+        : (typeof auditData?.score_range?.wheelchair === 'number' ? auditData.score_range.wheelchair : 25);
 
-      if (onResolveFix) onResolveFix();
+      const newScoreVal = Array.isArray(data?.score_range?.wheelchair)
+        ? (data.score_range.wheelchair[1] ?? data.score_range.wheelchair[0])
+        : (typeof data?.score_range?.wheelchair === 'number' ? data.score_range.wheelchair : 0);
+
+      const isStatusVerified = data?.assessment_status === 'Partially verified' || data?.assessment_status === 'Verified by user evidence';
+
+      if (newScoreVal > oldUpper && isStatusVerified) {
+        // Trigger celebratory confetti if improved!
+        confetti({
+          particleCount: 100,
+          spread: 70,
+          origin: { y: 0.6 }
+        });
+        if (onResolveFix) onResolveFix();
+      }
     } catch (err) {
       console.error('Before/After error:', err);
+      setModalError('Connection error. Please try again in a moment.');
     } finally {
       setAnalyzing(false);
     }
   };
 
-  const oldScore = auditData?.score_range?.wheelchair ? auditData.score_range.wheelchair[0] : 25;
-  const newScore = improvedResult?.scores?.wheelchair?.label === 'Accessible' || improvedResult?.score_range?.wheelchair?.[1] >= 80 ? 85 : 80;
+  const oldScore = Array.isArray(auditData?.score_range?.wheelchair)
+    ? (auditData.score_range.wheelchair[1] ?? auditData.score_range.wheelchair[0])
+    : (typeof auditData?.score_range?.wheelchair === 'number' ? auditData.score_range.wheelchair : 25);
+  const oldLabel = auditData?.scores?.wheelchair?.label || 'Blocked';
+
+  const newScore = improvedResult?.score_range?.wheelchair
+    ? (Array.isArray(improvedResult.score_range.wheelchair)
+        ? (improvedResult.score_range.wheelchair[1] ?? improvedResult.score_range.wheelchair[0])
+        : improvedResult.score_range.wheelchair)
+    : 0;
+  const newLabel = improvedResult?.scores?.wheelchair?.label || 'Accessible';
+
+  const isImproved = Boolean(
+    improvedResult &&
+    newScore > oldScore &&
+    (improvedResult.assessment_status === 'Partially verified' || improvedResult.assessment_status === 'Verified by user evidence')
+  );
 
   return (
     <div
@@ -106,6 +149,16 @@ export default function BeforeAfterModal({
           {t.beforeAfterSubtitle}
         </p>
 
+        {/* Friendly Inline Error */}
+        {modalError && (
+          <div
+            role="alert"
+            className="p-4 rounded-2xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 mb-6 text-xs sm:text-sm font-semibold"
+          >
+            {modalError}
+          </div>
+        )}
+
         {/* Side by side comparison */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
           {/* Before Card */}
@@ -115,7 +168,7 @@ export default function BeforeAfterModal({
                 Before Fix
               </span>
               <span className="text-xs font-bold px-2 py-0.5 rounded bg-rose-100 dark:bg-rose-950 text-rose-800 dark:text-rose-300">
-                Score: {oldScore} (Blocked)
+                Score: {oldScore} ({oldLabel})
               </span>
             </div>
             {beforePhoto ? (
@@ -139,7 +192,7 @@ export default function BeforeAfterModal({
               </span>
               {improvedResult ? (
                 <span className="text-xs font-bold px-2 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
-                  Score: {newScore} (Accessible)
+                  Score: {newScore} ({newLabel})
                 </span>
               ) : (
                 <span className="text-xs font-bold text-slate-400">Awaiting Photo</span>
@@ -177,23 +230,32 @@ export default function BeforeAfterModal({
         </div>
 
         {/* Improvement Celebration Banner */}
-        {improvedResult && (
+        {improvedResult && isImproved && (
           <div className="p-5 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-xl mb-6 flex items-start gap-4 animate-in slide-in-from-bottom">
             <CheckCircle className="w-8 h-8 shrink-0 mt-0.5" />
             <div className="flex-1">
               <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-lg font-black">{t.improvedBanner}</h3>
                 <span className="text-xs font-bold px-2.5 py-0.5 rounded-full bg-emerald-900/60 uppercase">
-                  Verified by User Evidence
+                  {improvedResult.assessment_status}
                 </span>
               </div>
               <p className="text-sm mt-1">
-                {t.scoreProgression} <strong>{oldScore} (Blocked) → {newScore} (Accessible)</strong>
+                {t.scoreProgression} <strong>{oldScore} ({oldLabel}) → {newScore} ({newLabel})</strong>
               </p>
               <p className="text-xs text-emerald-100 mt-1">
                 {t.resolvedNotice}
               </p>
             </div>
+          </div>
+        )}
+
+        {/* Neutral Message if not improved */}
+        {improvedResult && !isImproved && (
+          <div className="p-4 rounded-2xl bg-slate-100 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 mb-6 flex items-start gap-3">
+            <p className="text-xs sm:text-sm font-medium">
+              No clear improvement detected. Try a clearer photo.
+            </p>
           </div>
         )}
 

@@ -12,7 +12,7 @@ import SlopeReader from './components/SlopeReader';
 import BeforeAfterModal from './components/BeforeAfterModal';
 import PlacardModal from './components/PlacardModal';
 import { translations } from './translations';
-import { RotateCcw, QrCode } from 'lucide-react';
+import { RotateCcw, QrCode, AlertCircle, X } from 'lucide-react';
 
 export default function App() {
   const [lang, setLang] = useState(() => localStorage.getItem('opendoor_lang') || 'en');
@@ -23,11 +23,11 @@ export default function App() {
 
   // Impact Counter stored in localStorage
   const [impact, setImpact] = useState(() => {
-    const saved = localStorage.getItem('opendoor_impact');
+    const saved = localStorage.getItem('opendoor_impact_v2');
     if (saved) {
       try { return JSON.parse(saved); } catch (e) {}
     }
-    return { audited: 14, barriersFound: 38, barriersFixed: 9 };
+    return { audited: 0, barriersFound: 0, barriersFixed: 0 };
   });
 
   // Current photo & audit results
@@ -51,7 +51,7 @@ export default function App() {
 
   // Sync impact with localStorage
   useEffect(() => {
-    localStorage.setItem('opendoor_impact', JSON.stringify(impact));
+    localStorage.setItem('opendoor_impact_v2', JSON.stringify(impact));
   }, [impact]);
 
   // Apply Accessible Font Scaling to root document (scales all rem units)
@@ -225,6 +225,30 @@ export default function App() {
 
       {/* Main View Area */}
       <main className="flex-1 w-full pb-16">
+        {/* Global dismissible error banner on any screen */}
+        {error && (
+          <div className="max-w-4xl mx-auto px-4 pt-4">
+            <div
+              role="alert"
+              aria-live="assertive"
+              className="p-4 rounded-2xl bg-red-50 dark:bg-red-950/50 border-2 border-red-500 text-red-900 dark:text-red-200 flex items-start gap-3 shadow-md"
+            >
+              <AlertCircle className="w-5 h-5 shrink-0 text-red-600 mt-0.5" />
+              <div className="flex-1 text-xs sm:text-sm font-semibold">
+                {error}
+              </div>
+              <button
+                type="button"
+                onClick={() => setError(null)}
+                className="p-1 rounded-lg hover:bg-red-100 dark:hover:bg-red-900/60 text-red-700 dark:text-red-300 transition-colors"
+                aria-label="Dismiss error banner"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Secondary Quick Action Bar when audit is active */}
         {hasAudit && (
           <div className="max-w-4xl mx-auto px-4 pt-4 flex flex-wrap items-center justify-between gap-2">

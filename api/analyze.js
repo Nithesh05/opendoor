@@ -42,6 +42,12 @@ export default async function handler(req, res) {
 
     const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
+    if (!GEMINI_API_KEY) {
+      return res.status(503).json({
+        error: "GEMINI_API_KEY is not configured on the server. Please set GEMINI_API_KEY."
+      });
+    }
+
     // Scale reference description
     let refObjDescription = 'None specified.';
     if (referenceObject === 'coin') refObjDescription = '₹10 Indian coin (~2.7 cm diameter) is in frame for scale.';
@@ -57,10 +63,13 @@ export default async function handler(req, res) {
     if (isBeforeAfter && beforeData) {
       beforeAfterContext = `\n\nTHIS IS A BEFORE/AFTER ASSESSMENT:
 The user has submitted an updated photo after making accessibility modifications.
-Previous assessment scores: Wheelchair: ${JSON.stringify(beforeData.scores?.wheelchair || {})}, Walker: ${JSON.stringify(beforeData.scores?.walker || {})}.
-Previous barriers: ${JSON.stringify(beforeData.barriers?.map(b => b.title) || [])}.
-Check if barriers have been resolved by the modification (e.g., ramp installed, threshold leveled, grab bar added).
-If improved, reflect the higher verified score, set assessment_status to at least 'Partially verified' or 'Verified by user evidence', and note the improvements.`;
+Previous assessment summary:
+- Previous Wheelchair: range ${JSON.stringify(beforeData.score_range?.wheelchair || [])}, score: ${JSON.stringify(beforeData.scores?.wheelchair || {})}
+- Previous Walker: range ${JSON.stringify(beforeData.score_range?.walker || [])}, score: ${JSON.stringify(beforeData.scores?.walker || {})}
+- Previous Low Vision: range ${JSON.stringify(beforeData.score_range?.low_vision || [])}, score: ${JSON.stringify(beforeData.scores?.low_vision || {})}
+- Previous barriers: ${JSON.stringify(beforeData.barriers?.map(b => b.title) || [])}
+
+Please return the exact same JSON schema. Base assessment_status, score_range, scores, and labels strictly and only on what is visible in this new after photo. If barriers have been resolved by the modification (e.g., ramp installed, threshold leveled, grab bar added), reflect the improved score_range, scores, and set assessment_status to "Partially verified" or "Verified by user evidence". If barriers remain or the photo is unclear, reflect the true condition without inventing improvements.`;
     }
 
     const languageInstruction = language === 'ta'
@@ -176,160 +185,9 @@ Strict JSON Schema required:
 
     let rawContent = resultData?.candidates?.[0]?.content?.parts?.[0]?.text;
 
-    // Robust Fallback if API key missing or external 503
     if (!rawContent) {
-      const hasDoorwayEvidence = userEvidence && userEvidence.some(e => (e.item || '').toLowerCase().includes('door') || (e.value || '').includes('85'));
-      const hasNoRampConfirmed = userEvidence && userEvidence.some(e => (e.value || '').toLowerCase().includes('no ramp'));
-      const hasSlopeConfirmed = userEvidence && userEvidence.some(e => (e.item || '').toLowerCase().includes('slope'));
-
-      let status = 'Incomplete';
-      let isProvisional = true;
-      let scoreRange = { wheelchair: [20, 45], walker: [30, 55], low_vision: [40, 65] };
-
-      if (hasDoorwayEvidence || hasNoRampConfirmed || hasSlopeConfirmed) {
-        status = 'Partially verified';
-        scoreRange = { wheelchair: [35, 60], walker: [45, 65], low_vision: [50, 70] };
-      }
-      if (hasDoorwayEvidence && hasNoRampConfirmed) {
-        status = 'Verified by user evidence';
-        isProvisional = false;
-        scoreRange = { wheelchair: [40, 40], walker: [55, 55], low_vision: [65, 65] };
-      }
-      if (isBeforeAfter) {
-        status = 'Verified by user evidence';
-        isProvisional = false;
-        scoreRange = { wheelchair: [85, 85], walker: [85, 85], low_vision: [80, 80] };
-      }
-
-      return res.status(200).json({
-        valid_entrance_photo: true,
-        photo_quality_issue: null,
-        assessment_status: status,
-        overall_confidence: status === 'Verified by user evidence' ? "High" : "Medium",
-        score_is_provisional: isProvisional,
-        score_range: scoreRange,
-        scores: {
-          wheelchair: {
-            label: isBeforeAfter ? "Accessible" : (status === 'Verified by user evidence' ? "Difficult" : "Blocked"),
-            reason: isBeforeAfter
-              ? (language === 'ta' ? "புதிய சாய்வுப்பாதை மற்றும் கைப்பிடிகள் நிறுவப்பட்டு எளிதாக செல்ல முடிகிறது." : "Newly installed modular ramp and handrails provide accessible step-free access.")
-              : (language === 'ta' ? "3 கான்கிரீட் படிகள் சக்கர நாற்காலி அணுகலை முழுமையாக தடுக்கின்றன." : "Three elevated concrete steps obstruct step-free wheelchair approach.")
-          },
-          walker: {
-            label: isBeforeAfter ? "Accessible" : "Difficult",
-            reason: isBeforeAfter
-              ? (language === 'ta' ? "சாய்வுப்பாதை மற்றும் கைப்பிடிகள் முதியோருக்கு பாதுகாப்பு தருகின்றன." : "Ramp with dual handrails provides stable support for walker users.")
-              : (language === 'ta' ? "படிகளில் கைப்பிடி இல்லாததால் ஏறுவது மிகவும் கடினம்." : "Steps lack handrail support, posing a significant fall hazard for elderly visitors.")
-          },
-          low_vision: {
-            label: isBeforeAfter ? "Accessible" : "Difficult",
-            reason: isBeforeAfter
-              ? (language === 'ta' ? "மஞ்சள் நிற விளிம்புகள் தெளிவாக வழிகாட்டுகின்றன." : "Bright yellow high-contrast nosing provides clear visual guidance.")
-              : (language === 'ta' ? "படி விளிம்புகளில் மாறுபட்ட வண்ணக் குறியீடுகள் இல்லை." : "Steps lack high-contrast edge markings or tactile warning pavers.")
-          }
-        },
-        observed: [
-          language === 'ta' ? "நுழைவாயிலில் 3 கான்கிரீட் படிகள் உள்ளன (சுமார் 16-18 செ.மீ உயரம்)." : "Elevated entrance plinth with 3 concrete steps (~16-18 cm each, estimated).",
-          language === 'ta' ? "கண்ணாடி பேனல் கொண்ட இரட்டைக் கதவு உள்ளது." : "Wooden framed door with glass panels.",
-          language === 'ta' ? "நுழைவாயிலில் நிலையான சாய்வுப்பாதை அல்லது கைப்பிடிகள் இல்லை." : "Absence of permanent ramp and handrails."
-        ],
-        needs_verification: (status === 'Verified by user evidence' || isBeforeAfter) ? [] : [
-          {
-            item: "Door clearance",
-            why: language === 'ta' ? "கதவு கோணத்தில் இருப்பதால் தெளிவான அகலம் தெரியவில்லை." : "Doorway angle obscures clear usable passage width.",
-            evidence_requested: language === 'ta' ? "கதவின் முன் பார்வை அல்லது செ.மீ-ல் அளவீடு." : "Front view of doorway, or typed width in cm.",
-            input_type: "photo"
-          },
-          {
-            item: "Ramp availability",
-            why: language === 'ta' ? "பக்கவாட்டு சாய்வுப்பாதை உள்ளதா என புகைப்படத்தில் பார்க்க முடியவில்லை." : "Ramp cannot be confirmed from single front perspective.",
-            evidence_requested: language === 'ta' ? "சாய்வுப்பாதை இல்லை என்பதை உறுதிப்படுத்தவும்." : "Confirm if an alternative ramp exists on site.",
-            input_type: "confirm"
-          }
-        ],
-        user_confirmed: (userEvidence || []).map(e => `${e.item}: ${e.value} (CONFIRMED BY USER)`),
-        barriers: isBeforeAfter ? [] : [
-          {
-            title: language === 'ta' ? "நுழைவாயிலில் மூன்று படிகள்" : "Three concrete steps at entrance",
-            severity: "red",
-            estimated_measurement: "3 steps, ~17 cm rise each (ESTIMATED from scale)",
-            confidence: "High",
-            affects: ["wheelchair", "walker"],
-            fix: language === 'ta' ? "1:12 சாய்வு கொண்ட மடிக்கக்கூடிய அல்லது நிலையான சாய்வுத்தளம் அமைத்தல்" : "Install modular galvanized steel ramp with 1:12 slope and safety curbs.",
-            cost_range_inr: [3500, 6500],
-            who_can_do_it: language === 'ta' ? "உள்ளூர் வெல்டர் அல்லது தச்சர்" : "Local welder or carpenter",
-            priority: 1
-          },
-          {
-            title: language === 'ta' ? "கைப்பிடிகள் இல்லாத படிகள்" : "Missing handrails on steps",
-            severity: "yellow",
-            estimated_measurement: "Height ~51 cm without support (ESTIMATED)",
-            confidence: "High",
-            affects: ["walker", "low_vision"],
-            fix: language === 'ta' ? "இருபுறமும் 32 மிமீ ஸ்டெயின்லெஸ் ஸ்டீல் கைப்பிடிகள் பொருத்துதல்" : "Install dual-height stainless steel wall-mounted handrail (85–90 cm).",
-            cost_range_inr: [1800, 3200],
-            who_can_do_it: language === 'ta' ? "உள்ளூர் வெல்டர்" : "Local welder",
-            priority: 2
-          },
-          {
-            title: language === 'ta' ? "படி விளிம்புகளில் மாறுபட்ட நிறம் இல்லை" : "Lack of high-contrast step nosing",
-            severity: "yellow",
-            estimated_measurement: "Uniform grey concrete surface",
-            confidence: "High",
-            affects: ["low_vision"],
-            fix: language === 'ta' ? "படிகளின் விளிம்பில் மஞ்சள் நிற ஆண்டி-ஸ்கிட் பெயிண்ட் பூசுதல்" : "Apply 50 mm bright yellow non-slip contrast paint or abrasive tape along step edges.",
-            cost_range_inr: [400, 800],
-            who_can_do_it: language === 'ta' ? "உள்ளூர் பெயிண்டர்" : "Local painter",
-            priority: 3
-          }
-        ],
-        total_cost_range_inr: isBeforeAfter ? [0, 0] : [5700, 10500],
-        sensory_tags: [
-          language === 'ta' ? "தெரு இரைச்சல் சாத்தியம்" : "Likely noisy street approach",
-          language === 'ta' ? "பகல் நேர பிரகாசம்" : "Moderate daylight glare"
-        ],
-        next_step: isBeforeAfter
-          ? (language === 'ta' ? "நுழைவு வசதி உறுதிசெய்யப்பட்டது. சமூக வரைபடத்தில் சேர்க்கலாம்." : "Entrance is verified barrier-free. Add to community map!")
-          : (language === 'ta' ? "கதவு அகலத்தை உறுதிசெய்து, உரிமையாளருக்கு கோரிக்கை கடிதம் அனுப்புங்கள்." : "Provide doorway evidence or generate owner request letter to begin low-cost ramp installation."),
-        walkthrough_text: isBeforeAfter
-          ? (language === 'ta'
-              ? "நீங்கள் மருத்துவமனை நுழைவாயிலுக்கு வருகிறீர்கள். முன்பு இருந்த 3 படிகளுக்கு மேல் ஒரு புதிய உலோக சாய்வுப்பாதை அமைக்கப்பட்டுள்ளது. இருபுறமும் உறுதியான கைப்பிடிகள் உள்ளன. மஞ்சள் நிற பாதுகாப்பு விளிம்புகள் தெளிவாக வழிகாட்டுகின்றன. இப்போது சக்கர நாற்காலி மற்றும் வாக்கர் கொண்டு எளிதாக உள்ளே செல்ல முடிகிறது."
-              : "You arrive at the entrance. The previous 3 steps have been bridged by a newly installed modular metal ramp. Sturdy handrails flank both sides and high-contrast yellow safety edges clearly define the ramp path. You can now roll smoothly through the doorway without assistance.")
-          : (language === 'ta'
-              ? "நீங்கள் மருத்துவமனை நுழைவாயிலுக்கு வருகிறீர்கள். உங்கள் வழியில் 3 கான்கிரீட் படிகள் உள்ளன. சாய்வுத்தளம் எதுவும் கண்ணில் படவில்லை. கைப்பிடிகள் இல்லாததால் முதியோருக்கு ஆபத்தானது. கதவின் அகலத்தை இந்த கோணத்தில் உறுதிப்படுத்த முடியவில்லை. குறைந்த செலவில் சாய்வுப்பாதை அமைத்தால் மட்டுமே சக்கர நாற்காலியில் செல்ல முடியும்."
-              : "You arrive at the entrance. Directly ahead, three concrete steps obstruct your approach. I cannot observe any ramp. There are no handrails to hold onto. The door appears to be standard, but clear width cannot be verified from this angle. Entering unassisted is currently blocked for wheelchair users until a ramp is installed."),
-        owner_letter: language === 'ta'
-          ? `வணக்கம் கட்டட உரிமையாளர் / மேலாளர் அவர்களுக்கு,
-
-உங்கள் கட்டட நுழைவாயிலில் சில எளிய மற்றும் குறைந்த செலவிலான மாற்றங்களைச் செய்தால், சக்கர நாற்காலி பயன்படுத்துவோர், முதியோர்கள் மற்றும் பார்வைக் குறைபாடுள்ள வாடிக்கையாளர்கள் எளிதாக வந்து செல்லும் வகையில் அதை மாற்ற முடியும் என்பதைத் தெரிவிக்கவே இக்கடிதம்.
-
-கண்டறியப்பட்ட அணுகல் தடைகள்:
-- 3 கான்கிரீட் படிகள்: 1:12 சாய்வு கொண்ட மடிக்கக்கூடிய அல்லது நிலையான சாய்வுப்பாதை அமைத்தல் (உத்தேச செலவு: ₹3,500 – ₹6,500).
-- கைப்பிடி இல்லாமை: இருபுறமும் ஸ்டெயின்லெஸ் ஸ்டீல் கைப்பிடிகள் பொருத்துதல் (உத்தேச செலவு: ₹1,800 – ₹3,200).
-- படி விளிம்பு அடையாளம்: மஞ்சள் நிற எச்சரிக்கை பெயிண்ட் பூசுதல் (உத்தேச செலவு: ₹400 – ₹800).
-
-மொத்த உத்தேச செலவு: ₹5,700 – ₹10,500. உள்ளூர் வெல்டர் அல்லது தச்சரைக் கொண்டு 1–2 நாட்களில் இதை எளிதாக முடித்துவிடலாம்.
-
-உங்கள் நுழைவாயிலை அணுகக்கூடியதாக மாற்றுவதன் மூலம் உங்கள் வாடிக்கையாளர் எண்ணிக்கை அதிகரிக்கும். உங்கள் கட்டடத்தை எங்கள் அணுகல் வரைபடத்தில் பெருமையுடன் சேர்க்க விரும்புகிறோம்!
-
-பணிவுடன்,
-ஓபன் டோர் AccessProof சமூக உறுப்பினர்`
-          : `Dear Building Owner / Manager,
-
-I recently visited your premises and noticed that with a few affordable modifications, your entrance could become welcoming and accessible for wheelchair users, elderly people with walkers, and customers with low vision.
-
-Currently, the following entrance barriers were identified:
-- Three concrete steps: Can be bridged with a modular ramp at 1:12 slope (Est: ₹3,500 – ₹6,500).
-- Missing handrails: Install dual-height stainless steel handrails for fall prevention (Est: ₹1,800 – ₹3,200).
-- Step visibility: Apply 50 mm bright yellow contrast paint along step edges (Est: ₹400 – ₹800).
-
-Estimated Total Project Cost: ₹5,700 – ₹10,500. Local welders or carpenters can easily complete this work in 1–2 days.
-
-Making your entrance barrier-free will expand your clientele and ensure no customer is turned away. We would love to celebrate your improved entrance on our community accessibility map!
-
-Sincerely,
-A Community Member via Open Door AccessProof`,
-        disclaimer: language === 'ta' ? "புகைப்படங்களை அடிப்படையாகக் கொண்ட AI மதிப்பீடு. நேரில் சரிபார்க்கவும். இது சட்டப்பூர்வ சான்றிதழ் அல்ல." : "AI estimate from photos. Verify on site. This is not an accessibility certification."
+      return res.status(503).json({
+        error: "The AI service is temporarily unavailable. Please try again in a moment."
       });
     }
 
@@ -361,15 +219,21 @@ A Community Member via Open Door AccessProof`,
       }
     }
 
-    if (parsedResult.needs_verification.length > 0 && (!userEvidence || userEvidence.length === 0)) {
-      parsedResult.assessment_status = 'Incomplete';
-      parsedResult.score_is_provisional = true;
-    } else if (userEvidence && userEvidence.length > 0 && parsedResult.needs_verification.length > 0) {
-      parsedResult.assessment_status = 'Partially verified';
-      parsedResult.score_is_provisional = true;
-    } else if (userEvidence && userEvidence.length > 0 && parsedResult.needs_verification.length === 0) {
-      parsedResult.assessment_status = 'Verified by user evidence';
-      parsedResult.score_is_provisional = false;
+    if (!isBeforeAfter) {
+      if (parsedResult.needs_verification.length > 0 && (!userEvidence || userEvidence.length === 0)) {
+        parsedResult.assessment_status = 'Incomplete';
+        parsedResult.score_is_provisional = true;
+      } else if (userEvidence && userEvidence.length > 0 && parsedResult.needs_verification.length > 0) {
+        parsedResult.assessment_status = 'Partially verified';
+        parsedResult.score_is_provisional = true;
+      } else if (userEvidence && userEvidence.length > 0 && parsedResult.needs_verification.length === 0) {
+        parsedResult.assessment_status = 'Verified by user evidence';
+        parsedResult.score_is_provisional = false;
+      }
+    } else {
+      if (!parsedResult.assessment_status) {
+        parsedResult.assessment_status = parsedResult.needs_verification?.length === 0 ? 'Verified by user evidence' : 'Partially verified';
+      }
     }
 
     return res.status(200).json(parsedResult);
